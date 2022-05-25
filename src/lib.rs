@@ -51,7 +51,7 @@ fn replace_wrapper_type(ty: &mut Type, mut new_type_path: TypePath) {
             panic!("Path types must not be empty");
         }
     } else {
-        panic!("Only path types can be replaced to weak_type")
+        panic!("Only path types can be replaced to weak type")
     };
 }
 
@@ -68,7 +68,7 @@ fn derive_named_fields_struct(
     for mut field in fields_named.named {
         let ident = field.ident.clone().expect("Named field expected");
 
-        if let Some(weak_type) = take_attr("weak_type", &mut field.attrs) {
+        if let Some(weak_type) = take_attr("weak", &mut field.attrs) {
             replace_wrapper_type(&mut field.ty, weak_type);
 
             //
@@ -121,10 +121,10 @@ fn derive_named_fields_struct(
     }
 }
 
-#[proc_macro_derive(Weak, attributes(weak_name, weak_type, upgrade, downgrade))]
+#[proc_macro_derive(Weak, attributes(weak, upgrade, downgrade))]
 pub fn derive_weak(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut input: DeriveInput = parse_macro_input!(input);
-    let weak_ident = take_attr("weak_name", &mut input.attrs).unwrap_or(Ident::new(
+    let weak_ident = take_attr("weak", &mut input.attrs).unwrap_or(Ident::new(
         format!("W{}", input.ident).as_str(),
         input.ident.span(),
     ));
