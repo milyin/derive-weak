@@ -62,28 +62,37 @@ fn derive_named_fields_struct(
     fields_named: FieldsNamed,
 ) -> proc_macro2::TokenStream {
     let mut fields = Vec::new();
-    let mut downgrade_ops = Vec::new();
+    let mut downgrades = Vec::new();
+    let mut upgrade_cmds = Vec::new();
+    let mut upgrades = Vec::new();
     for mut field in fields_named.named {
         let ident = field.ident.clone().expect("Named field expected");
+
         if let Some(weak_type) = take_attr("weak_type", &mut field.attrs) {
             replace_wrapper_type(&mut field.ty, weak_type);
-            downgrade_ops.push(
-                // TODO: handle std Arc, Rc, etc.
-                if let Some(downgrade_op) = take_attr::<Expr>("downgrade", &mut field.attrs) {
-                    quote! {
-                        #ident: #downgrade_op
-                    }
+
+            //
+            // TODO: handle defauls for std Arc, Rc, etc.
+            //
+            let upgrade_op = take_attr::<Expr>("upgrade", &mut field.attrs)
+                .map_or(quote! {self.#ident.upgrade()}, |expr| quote! {#expr});
+
+            let downgrade_op = take_attr::<Expr>("downgrade", &mut field.attrs)
+                .map_or(quote! {self.#ident.downgrade()}, |expr| quote! {#expr});
+
+            upgrade_cmds.push(quote! {
+                let #ident = if let Some(v) = #upgrade_op {
+                    v
                 } else {
-                    quote! {
-                        #ident: self.#ident.downgrade()
-                    }
-                },
-            );
+                    return None;
+                };
+            });
+            upgrades.push(quote! {#ident});
+            downgrades.push(quote! { #ident: #downgrade_op });
             fields.push(field)
         } else {
-            downgrade_ops.push(quote! {
-                #ident: self.#ident.clone()
-            });
+            upgrades.push(quote! {#ident: self.#ident.clone()});
+            downgrades.push(quote! { #ident: self.#ident.clone() });
             fields.push(field);
         }
     }
@@ -96,28 +105,23 @@ fn derive_named_fields_struct(
         impl #ident {
             pub fn downgrade(&self) -> #weak_ident {
                 #weak_ident {
-                    #(#downgrade_ops,)*
+                    #(#downgrades,)*
                 }
             }
         }
 
         impl #weak_ident {
             pub fn upgrade(&self) -> Option<#ident> {
-                let bar = if let Some(v) = self.bar.upgrade() {
-                    v
-                } else {
-                    return None;
-                };
+                #(#upgrade_cmds)*
                 Some(#ident {
-                    foo: self.foo.clone(),
-                    bar
+                    #(#upgrades,)*
                 })
             }
         }
     }
 }
 
-#[proc_macro_derive(Weak, attributes(weak_name, weak_type, downgrade))]
+#[proc_macro_derive(Weak, attributes(weak_name, weak_type, upgrade, downgrade))]
 pub fn derive_weak(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut input: DeriveInput = parse_macro_input!(input);
     let weak_ident = take_attr("weak_name", &mut input.attrs).unwrap_or(Ident::new(
