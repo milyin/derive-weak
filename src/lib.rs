@@ -10,8 +10,8 @@ use std::mem::swap;
 
 use quote::quote;
 use syn::{
-    parse::Parse, parse_macro_input, Attribute, Data::Struct, DataStruct, DeriveInput, Fields,
-    FieldsNamed, Ident, Type, TypePath, Visibility,
+    parse::Parse, parse_macro_input, Attribute, Data::Struct, DataStruct, DeriveInput, Expr,
+    Fields, FieldsNamed, Ident, Type, TypePath, Visibility,
 };
 
 fn is_attr_named_fn<'a>(name: &'a str) -> impl Fn(&Attribute) -> bool + 'a {
@@ -62,11 +62,30 @@ fn derive_named_fields_struct(
     fields_named: FieldsNamed,
 ) -> proc_macro2::TokenStream {
     let mut fields = Vec::new();
+    let mut downgrade_ops = Vec::new();
     for mut field in fields_named.named {
+        let ident = field.ident.clone().expect("Named field expected");
         if let Some(weak_type) = take_attr("weak_type", &mut field.attrs) {
             replace_wrapper_type(&mut field.ty, weak_type);
+            downgrade_ops.push(
+                // TODO: handle std Arc, Rc, etc.
+                if let Some(downgrade_op) = take_attr::<Expr>("downgrade", &mut field.attrs) {
+                    quote! {
+                        #ident: #downgrade_op
+                    }
+                } else {
+                    quote! {
+                        #ident: self.#ident.downgrade()
+                    }
+                },
+            );
+            fields.push(field)
+        } else {
+            downgrade_ops.push(quote! {
+                #ident: self.#ident.clone()
+            });
+            fields.push(field);
         }
-        fields.push(field)
     }
 
     quote! {
@@ -74,11 +93,10 @@ fn derive_named_fields_struct(
             #(#fields,)*
         }
 
-        impl Foo {
+        impl #ident {
             pub fn downgrade(&self) -> #weak_ident {
                 #weak_ident {
-                    foo: self.foo.clone(),
-                    bar: std::rc::Rc::downgrade(&self.bar)
+                    #(#downgrade_ops,)*
                 }
             }
         }
@@ -99,7 +117,7 @@ fn derive_named_fields_struct(
     }
 }
 
-#[proc_macro_derive(Weak, attributes(weak_name, weak_type))]
+#[proc_macro_derive(Weak, attributes(weak_name, weak_type, downgrade))]
 pub fn derive_weak(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let mut input: DeriveInput = parse_macro_input!(input);
     let weak_ident = take_attr("weak_name", &mut input.attrs).unwrap_or(Ident::new(
