@@ -4,6 +4,7 @@ use derive_weak::Weak;
 #[weak_name(WeakFoo)]
 struct Foo {
     foo: usize,
+    #[weak_type(std::rc::Weak)]
     bar: std::rc::Rc<usize>,
 }
 
