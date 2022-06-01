@@ -6,15 +6,19 @@ fn rc() {
     #[weak(WeakFoo)]
     struct Foo {
         foo: usize,
-        #[weak(std::rc::Weak)]
-        #[downgrade(std::rc::Rc::downgrade(&self.bar))]
-        #[upgrade(self.bar.upgrade())]
+        #[weak = std::rc::Weak]
+        // #[weak = std::rc::Weak]
+        #[downgrade = std::rc::Rc::downgrade(&self.bar)]
+        // #[upgrade(self.bar.upgrade())]
+        #[upgrade = self.bar.upgrade()]
         bar: std::rc::Rc<usize>,
+        // #[weak]
+        bazz: std::rc::Rc<usize>,
     }
-
     let foo = Foo {
         foo: 42,
         bar: std::rc::Rc::new(42),
+        bazz: std::rc::Rc::new(43),
     };
     let wfoo = foo.downgrade();
     let foo2 = wfoo.upgrade().unwrap();
