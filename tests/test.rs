@@ -3,14 +3,14 @@ use derive_weak::Weak;
 #[test]
 fn rc() {
     #[derive(PartialEq, Weak)]
-    #[weak(WeakFoo)]
+    #[weak(name=WeakFoo, auto = false)]
     struct Foo {
         foo: usize,
-        #[weak = std::rc::Weak]
         // #[weak = std::rc::Weak]
-        #[downgrade = std::rc::Rc::downgrade(&self.bar)]
+        // #[weak = std::rc::Weak]
+        // #[downgrade = std::rc::Rc::downgrade(&self.bar)]
         // #[upgrade(self.bar.upgrade())]
-        #[upgrade = self.bar.upgrade()]
+        // #[upgrade = self.bar.upgrade()]
         bar: std::rc::Rc<usize>,
         // #[weak]
         bazz: std::rc::Rc<usize>,
