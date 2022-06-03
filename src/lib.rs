@@ -42,7 +42,7 @@ fn get_known_type(ty: &Type) -> Option<KnownType> {
     None
 }
 
-fn get_templates(known_type: Option<KnownType>) -> (Type, Expr, Expr) {
+fn get_default_templates(known_type: Option<KnownType>) -> (Type, Expr, Expr) {
     match known_type {
         Some(known_type) => match known_type {
             KnownType::Rc => (
@@ -50,9 +50,21 @@ fn get_templates(known_type: Option<KnownType>) -> (Type, Expr, Expr) {
                 parse_quote! { _.upgrade() },
                 parse_quote! { std::rc::Rc::downgrade(&_) },
             ),
-            KnownType::Arc => todo!(),
-            KnownType::CArc => todo!(),
-            KnownType::EArc => todo!(),
+            KnownType::Arc => (
+                parse_quote! { std::sync::Weak<_> },
+                parse_quote! { _.upgrade() },
+                parse_quote! { std::sync::Arc::downgrade(&_) },
+            ),
+            KnownType::CArc => (
+                parse_quote! { async_object::WCArc<_> },
+                parse_quote! { _.upgrade() },
+                parse_quote! { _.downgrade() },
+            ),
+            KnownType::EArc => (
+                parse_quote! { async_object::WEArc },
+                parse_quote! { _.upgrade() },
+                parse_quote! { _.downgrade() },
+            ),
         },
         None => (
             parse_quote! { Weak<_> },
@@ -177,7 +189,8 @@ fn derive_named_fields_struct(
             //
             // Fill weak type, upgrade and downgrade operations from defaults for known type and and override them from attributes
             //
-            let (mut weak_type, mut upgrade_op, mut downgrade_op) = get_templates(known_type);
+            let (mut weak_type, mut upgrade_op, mut downgrade_op) =
+                get_default_templates(known_type);
             if let Some(params) = params {
                 for param in params {
                     match param {
