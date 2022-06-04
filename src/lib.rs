@@ -54,7 +54,7 @@ fn get_default_templates(ty: &Type) -> Option<(bool, Type, Expr, Expr)> {
                 // replace foo::bar::Buzz<Quax> to foo::bar::WBuzz<Quax>
                 // no need to replace Quax to _ - it later is replaced to Quax anyway
                 let mut wtype_path = type_path.clone();
-                let last_segment = wtype_path.path.segments.last_mut().unwrap();
+                let last_segment = wtype_path.path.segments.last_mut()?;
                 last_segment.ident = Ident::new(
                     format!("W{}", last_segment.ident).as_str(),
                     last_segment.ident.span(),
@@ -296,10 +296,18 @@ impl Param for WeakStructParam {
 
 #[proc_macro_derive(Weak, attributes(weak))]
 pub fn derive_weak(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut input: DeriveInput = parse_macro_input!(input);
+    let input: DeriveInput = parse_macro_input!(input);
+    match derive_weak_impl(input) {
+        Ok(stream) => stream,
+        Err(e) => e.into_compile_error(),
+    }
+    .into()
+}
+
+fn derive_weak_impl(mut input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let mut weak_ident = Ident::new(format!("W{}", input.ident).as_str(), input.ident.span());
     let mut auto = true;
-    if let Some(params) = take_params::<WeakStructParam>("weak", &mut input.attrs).unwrap() {
+    if let Some(params) = take_params::<WeakStructParam>("weak", &mut input.attrs)? {
         for param in params {
             match param {
                 WeakStructParam::Name(Some(v)) => weak_ident = v,
@@ -308,27 +316,16 @@ pub fn derive_weak(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
             }
         }
     }
-
-    match input.data {
-        Struct(DataStruct {
-            fields: Fields::Named(fields_named),
-            ..
-        }) => derive_named_fields_struct(input.vis, input.ident, weak_ident, auto, fields_named)
-            .unwrap(),
-        Struct(DataStruct {
-            fields: Fields::Unnamed(_fields_unnamed),
-            ..
-        }) => {
-            todo!()
-        }
-        Struct(DataStruct {
-            fields: Fields::Unit,
-            ..
-        }) => {
-            todo!()
-        }
-        syn::Data::Enum(_) => todo!(),
-        syn::Data::Union(_) => panic!("derive(Weak) not supported for union"),
+    if let Struct(DataStruct {
+        fields: Fields::Named(fields_named),
+        ..
+    }) = input.data
+    {
+        derive_named_fields_struct(input.vis, input.ident, weak_ident, auto, fields_named)
+    } else {
+        Err(syn::Error::new(
+            input.span(),
+            "derive(Weak) supporrted only for struct type",
+        ))
     }
-    .into()
 }
