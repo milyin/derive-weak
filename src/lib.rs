@@ -12,66 +12,67 @@ use quote::quote;
 use syn::{
     parse::ParseStream,
     parse_macro_input, parse_quote,
+    spanned::Spanned,
     visit_mut::{visit_expr_mut, visit_type_mut, VisitMut},
     Data::Struct,
     DataStruct, DeriveInput, Expr, Fields, FieldsNamed, GenericArgument, Ident, LitBool,
     PathArguments, Type, Visibility,
 };
 
-enum KnownType {
-    Rc,
-    Arc,
-    CArc,
-    EArc,
-}
-
-fn get_known_type(ty: &Type) -> Option<KnownType> {
-    if let Type::Path(type_path) = ty {
+fn get_default_templates(ty: &Type) -> Option<(bool, Type, Expr, Expr)> {
+    let (known_type, weak_type, upgrade_op, downgrade_op) = if let Type::Path(type_path) = ty {
         if let Some(last_segment) = type_path.path.segments.last() {
             if last_segment.ident == "Rc" {
-                return Some(KnownType::Rc);
+                (
+                    true,
+                    parse_quote! { std::rc::Weak<_> },
+                    parse_quote! { _.upgrade() },
+                    parse_quote! { std::rc::Rc::downgrade(&_) },
+                )
             } else if last_segment.ident == "Arc" {
-                return Some(KnownType::Arc);
+                (
+                    true,
+                    parse_quote! { std::sync::Weak<_> },
+                    parse_quote! { _.upgrade() },
+                    parse_quote! { std::sync::Arc::downgrade(&_) },
+                )
             } else if last_segment.ident == "CArc" {
-                return Some(KnownType::CArc);
+                (
+                    true,
+                    parse_quote! { async_object::WCArc<_> },
+                    parse_quote! { _.upgrade() },
+                    parse_quote! { _.downgrade() },
+                )
             } else if last_segment.ident == "EArc" {
-                return Some(KnownType::EArc);
+                (
+                    true,
+                    parse_quote! { async_object::WEArc },
+                    parse_quote! { _.upgrade() },
+                    parse_quote! { _.downgrade() },
+                )
+            } else {
+                // replace foo::bar::Buzz<Quax> to foo::bar::WBuzz<Quax>
+                // no need to replace Quax to _ - it later is replaced to Quax anyway
+                let mut wtype_path = type_path.clone();
+                let last_segment = wtype_path.path.segments.last_mut().unwrap();
+                last_segment.ident = Ident::new(
+                    format!("W{}", last_segment.ident).as_str(),
+                    last_segment.ident.span(),
+                );
+                (
+                    false,
+                    wtype_path,
+                    parse_quote! { _.upgrade() },
+                    parse_quote! { _.downgrade() },
+                )
             }
+        } else {
+            return None;
         }
-    }
-    None
-}
-
-fn get_default_templates(known_type: Option<KnownType>) -> (Type, Expr, Expr) {
-    match known_type {
-        Some(known_type) => match known_type {
-            KnownType::Rc => (
-                parse_quote! { std::rc::Weak<_> },
-                parse_quote! { _.upgrade() },
-                parse_quote! { std::rc::Rc::downgrade(&_) },
-            ),
-            KnownType::Arc => (
-                parse_quote! { std::sync::Weak<_> },
-                parse_quote! { _.upgrade() },
-                parse_quote! { std::sync::Arc::downgrade(&_) },
-            ),
-            KnownType::CArc => (
-                parse_quote! { async_object::WCArc<_> },
-                parse_quote! { _.upgrade() },
-                parse_quote! { _.downgrade() },
-            ),
-            KnownType::EArc => (
-                parse_quote! { async_object::WEArc },
-                parse_quote! { _.upgrade() },
-                parse_quote! { _.downgrade() },
-            ),
-        },
-        None => (
-            parse_quote! { Weak<_> },
-            parse_quote! { _.upgrade() },
-            parse_quote! { _.downgrade() },
-        ),
-    }
+    } else {
+        return None;
+    };
+    Some((known_type, Type::Path(weak_type), upgrade_op, downgrade_op))
 }
 
 // TODO: currently replaces first occurence of _ placeholder. This can be fixed by addind annotation attribute if necessary
@@ -113,15 +114,15 @@ fn replace_underscore_in_expr(dst: &mut Expr, src: Expr) {
 }
 
 enum WeakFieldParam {
-    Type(Type),
+    Name(Type),
     Upgrade(Expr),
     Downgrade(Expr),
 }
 
 impl Param for WeakFieldParam {
     fn default(name: Ident) -> syn::Result<Self> {
-        if name == "type" {
-            Ok(WeakFieldParam::Type(parse_quote! { Weak<_> }))
+        if name == "name" {
+            Ok(WeakFieldParam::Name(parse_quote! { Weak<_> }))
         } else if name == "upgrade" {
             Ok(WeakFieldParam::Upgrade(parse_quote! { _.upgrade() }))
         } else if name == "downgrade" {
@@ -129,14 +130,14 @@ impl Param for WeakFieldParam {
         } else {
             Err(syn::Error::new(
                 name.span(),
-                "Unexpected parameter. Values 'type', 'upgrade' and 'downgrade' only allowed",
+                "Unexpected parameter. Values 'name', 'upgrade' and 'downgrade' only allowed",
             ))
         }
     }
 
     fn parse(&mut self, input: ParseStream) -> syn::Result<()> {
         match self {
-            WeakFieldParam::Type(ref mut ty) => *ty = input.parse()?,
+            WeakFieldParam::Name(ref mut ty) => *ty = input.parse()?,
             WeakFieldParam::Upgrade(ref mut expr) => *expr = input.parse()?,
             WeakFieldParam::Downgrade(ref mut expr) => *expr = input.parse()?,
         };
@@ -174,54 +175,60 @@ fn derive_named_fields_struct(
     let mut upgrades = Vec::new();
     for mut field in fields_named.named {
         let field_ident = field.ident.clone().expect("Named field expected");
-        let known_type = if auto {
-            get_known_type(&field.ty)
-        } else {
-            None
-        };
         let params = take_params::<WeakFieldParam>("weak", &mut field.attrs)?;
-        //
-        // Replace field to it's weak counterpart if:
-        // - it's type is known to us (Rc, Arc, etc) and auto mode is on
-        // - it's explicitly marked to be replaced by #[weak] attribute
-        //
-        if known_type.is_some() || params.is_some() {
-            //
-            // Fill weak type, upgrade and downgrade operations from defaults for known type and and override them from attributes
-            //
-            let (mut weak_type, mut upgrade_op, mut downgrade_op) =
-                get_default_templates(known_type);
-            if let Some(params) = params {
-                for param in params {
-                    match param {
-                        WeakFieldParam::Type(ty) => weak_type = ty,
-                        WeakFieldParam::Upgrade(expr) => upgrade_op = expr,
-                        WeakFieldParam::Downgrade(expr) => downgrade_op = expr,
-                    }
+        match get_default_templates(&field.ty) {
+            None => {
+                if params.is_some() {
+                    return Err(syn::Error::new(
+                        field.span(),
+                        "Cannot derive weak coupterpart for this type",
+                    ));
+                } else {
+                    upgrades.push(quote! {#field_ident: self.#field_ident.clone()});
+                    downgrades.push(quote! { #field_ident: self.#field_ident.clone() });
+                    fields.push(field);
                 }
             }
+            Some((known_type, mut weak_type, mut upgrade_op, mut downgrade_op)) => {
+                //
+                // Replace field to it's weak counterpart if:
+                // - it's type is known to us (Rc, Arc, etc) and auto mode is on
+                // - it's explicitly marked to be replaced by #[weak] attribute
+                //
+                if (known_type && auto) || params.is_some() {
+                    if let Some(params) = params {
+                        for param in params {
+                            match param {
+                                WeakFieldParam::Name(ty) => weak_type = ty,
+                                WeakFieldParam::Upgrade(expr) => upgrade_op = expr,
+                                WeakFieldParam::Downgrade(expr) => downgrade_op = expr,
+                            }
+                        }
+                    }
 
-            if let Some(wrapped_type) = get_wrapped_type(&field.ty) {
-                replace_underscore_in_type(&mut weak_type, wrapped_type.clone());
-            }
-            replace_underscore_in_expr(&mut downgrade_op, parse_quote! {self.#field_ident});
-            replace_underscore_in_expr(&mut upgrade_op, parse_quote! {self.#field_ident});
+                    if let Some(wrapped_type) = get_wrapped_type(&field.ty) {
+                        replace_underscore_in_type(&mut weak_type, wrapped_type.clone());
+                    }
+                    replace_underscore_in_expr(&mut downgrade_op, parse_quote! {self.#field_ident});
+                    replace_underscore_in_expr(&mut upgrade_op, parse_quote! {self.#field_ident});
 
-            upgrade_cmds.push(quote! {
-                let #field_ident = if let Some(v) = #upgrade_op {
-                    v
+                    upgrade_cmds.push(quote! {
+                        let #field_ident = if let Some(v) = #upgrade_op {
+                            v
+                        } else {
+                            return None;
+                        };
+                    });
+                    upgrades.push(quote! {#field_ident});
+                    downgrades.push(quote! { #field_ident: #downgrade_op });
+                    field.ty = weak_type;
+                    fields.push(field)
                 } else {
-                    return None;
-                };
-            });
-            upgrades.push(quote! {#field_ident});
-            downgrades.push(quote! { #field_ident: #downgrade_op });
-            field.ty = weak_type;
-            fields.push(field)
-        } else {
-            upgrades.push(quote! {#field_ident: self.#field_ident.clone()});
-            downgrades.push(quote! { #field_ident: self.#field_ident.clone() });
-            fields.push(field);
+                    upgrades.push(quote! {#field_ident: self.#field_ident.clone()});
+                    downgrades.push(quote! { #field_ident: self.#field_ident.clone() });
+                    fields.push(field);
+                }
+            }
         }
     }
     Ok(quote! {
