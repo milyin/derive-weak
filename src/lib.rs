@@ -1,8 +1,10 @@
 //! # Derive Weak
 //!
-//! Adds derive macro #[derive(Weak)] which creates 'weak' counterpart for the structure. I.e. when original structure
-//! contains reference counting pointers ([std::sync::Arc], [std::rc::Rc]), the corresponding weak structure contains the weak variants
-//! of these pointers ([std::sync::Weak], [std::rc::Weak]). This is useful when it's inconvenient to store some data under refernce counting
+//! Implements derive macro ```#[derive(Weak)]``` which creates 'weak' counterpart for the structure. I.e. when original structure
+//! contains reference counting pointers ([Arc](std::sync::Arc), [Rc](std::rc::Rc)), the corresponding weak structure contains the weak variants
+//! of these pointers ([std::sync::Weak], [std::rc::Weak]).
+//!
+//! This may be useful when it's inconvenient to store some data under refernce counting
 //! pointer, due to performance or ergonomic reasons.
 //!
 mod param;
@@ -293,6 +295,77 @@ impl Param for WeakStructParam {
         Ok(())
     }
 }
+
+/// `#[derive(Weak)]` for struct type `Foo` generates new type `WFoo` (name can be changed) with reference counting fields
+/// replaced to their non-owning (weak) pairs. Methods `downgrade() -> WFoo` and `upgrade() -> Option<Foo>` added to `Foo` and `WFoo`
+/// respectively.
+///
+/// # Example
+///
+/// ```
+/// use derive_weak::Weak;
+///
+/// #[derive(Weak)]
+/// struct Foo {
+///    rc: std::rc::Rc<usize>,
+///    arc: std::sync::Arc<usize>
+/// }
+///
+/// let foo = Foo { rc: std::rc::Rc::new(42), arc: std::sync::Arc::new(1984) };
+/// let wfoo: WFoo = foo.downgrade();
+/// let _ : &std::rc::Weak<usize> = &wfoo.rc;
+/// let _ : &std::sync::Weak<usize> = &wfoo.arc;
+/// let foo2: Option<Foo> = wfoo.upgrade();
+///
+/// ```
+///
+/// # Customisation with attributes
+///
+/// All settings are put as parameters to `#[weak]` attribute. This attribute may appear before type itself and before fields to be replaced.
+/// The allowed parameters are different for these cases.
+///
+/// ## Type parameters
+///
+/// - ```auto:  bool``` When true, all known types (at this moment they are [Rc](std::rc::Rc), [Arc](std::sync::Arc),
+///   [CArc](https://docs.rs/async_object/0.1.1/async_object/struct.CArc.html), [EArc](https://docs.rs/async_object/0.1.1/async_object/struct.EArc.html))
+///   are automatically replaced to weak ones.
+///   Otherwise (with ```#[weak(auto=false)]```) only fields prepend3ed by ```#[weak]``` attribute are replaced.
+///   True by default.
+///
+/// - ```name: Ident``` Sets name of weak structure instead of default `W{struct_name}`
+///
+/// Example:
+///
+/// ```
+/// use derive_weak::Weak;
+/// #[derive(Weak)]
+/// #[weak(name=WeakFoo, auto=false)]
+/// struct Foo {
+///   #[weak]
+///   rc: std::rc::Rc<usize>
+/// }
+/// ```
+///
+/// ## Field parameters
+///
+/// - ```name: TypePath``` Weak type for field
+///
+/// - ```upgrade: Expr``` Upgrage operation for field. The ```_``` symbol is replaced to ```self.field_name``` in operation
+///
+/// - ```downgrade: Expr``` Downgrade operation for field. The ```_``` symbol is replaced to ```self.field_name``` in operation
+///
+//// Example:
+///
+/// ```
+/// use derive_weak::Weak;
+/// #[derive(Weak)]
+/// struct Foo {
+///   #[weak(name=std::rc::Weak<_>, upgrade=_.upgrade(), downgrade=std::rc::Rc::downgrade(&_))]
+///   rc: std::rc::Rc<usize>
+/// }
+/// ```
+///
+///
 
 #[proc_macro_derive(Weak, attributes(weak))]
 pub fn derive_weak(input: proc_macro::TokenStream) -> proc_macro::TokenStream {

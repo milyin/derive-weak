@@ -117,3 +117,14 @@ fn explicit() {
     drop(bar2);
     assert!(wbar.upgrade().is_none());
 }
+
+// #[test]
+// fn clone() {
+//     #[derive(Weak, Clone)]
+//     struct Foo {
+//         rc: Rc<usize>,
+//     }
+//     let foo = Foo { rc: Rc::new(42) };
+//     let wfoo = foo.downgrade();
+//     let wfoo2 = wfoo.clone();
+// }
