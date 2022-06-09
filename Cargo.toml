@@ -1,7 +1,13 @@
 [package]
-name = "derive-weak"
+name = "derive_weak"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Make weak counterpart for structure"
+repository = "https://github.com/milyin/async-object"
+# documentation = ""
+readme = "README.md"
+ 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -11,8 +17,8 @@ quote = "1.0"
 proc-macro2 = "1.0"
 
 [dev-dependencies]
-async_object = { path = "../async_object" }
-# async_object = "0.1.1"
+# async_object = { path = "../async_object" }
+async_object = "0.1.2"
 
 [lib]
 proc-macro = true

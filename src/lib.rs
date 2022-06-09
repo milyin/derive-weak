@@ -4,8 +4,7 @@
 //! contains reference counting pointers ([Arc](std::sync::Arc), [Rc](std::rc::Rc)), the corresponding weak structure contains the weak variants
 //! of these pointers ([std::sync::Weak], [std::rc::Weak]).
 //!
-//! This may be useful when it's inconvenient to store some data under refernce counting
-//! pointer, due to performance or ergonomic reasons.
+//! This may be useful when it's inconvenient to store some data under refernce counting pointer, due to performance or ergonomic reasons.
 //!
 mod param;
 
@@ -234,6 +233,7 @@ fn derive_named_fields_struct(
         }
     }
     Ok(quote! {
+        #[derive(Clone)]
         #vis struct #weak_ident {
             #(#fields,)*
         }
@@ -326,7 +326,7 @@ impl Param for WeakStructParam {
 ///
 /// ## Struct parameters
 ///
-/// - ```explicit:  bool``` Normally all known types (at this moment they are [Rc](std::rc::Rc), [Arc](std::sync::Arc),
+/// - ```explicit:  bool``` Normally all fields with known types (at this moment they are [Rc](std::rc::Rc), [Arc](std::sync::Arc),
 ///   [CArc](https://docs.rs/async_object/0.1.1/async_object/struct.CArc.html), [EArc](https://docs.rs/async_object/0.1.1/async_object/struct.EArc.html))
 ///   are automatically replaced to weak ones. Setting ```explicit = true``` or just ```explicit``` in parameters disables this behavior.
 ///   I.e. with ```#[weak(explicit)]``` before struct) only fields prepended by ```#[weak]``` attribute are replaced.
