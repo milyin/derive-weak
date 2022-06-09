@@ -168,7 +168,7 @@ fn derive_named_fields_struct(
     vis: Visibility,
     struct_ident: Ident,
     weak_ident: Ident,
-    auto: bool,
+    explicit: bool,
     fields_named: FieldsNamed,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let mut fields = Vec::new();
@@ -194,10 +194,10 @@ fn derive_named_fields_struct(
             Some((known_type, mut weak_type, mut upgrade_op, mut downgrade_op)) => {
                 //
                 // Replace field to it's weak counterpart if:
-                // - it's type is known to us (Rc, Arc, etc) and auto mode is on
+                // - it's type is known to us (Rc, Arc, etc) and explicit mode is off
                 // - it's explicitly marked to be replaced by #[weak] attribute
                 //
-                if (known_type && auto) || params.is_some() {
+                if (known_type && !explicit) || params.is_some() {
                     if let Some(params) = params {
                         for param in params {
                             match param {
@@ -268,26 +268,26 @@ fn derive_named_fields_struct(
 #[derive(Debug)]
 enum WeakStructParam {
     Name(Option<Ident>),
-    Auto(bool),
+    Explicit(bool),
 }
 
 impl Param for WeakStructParam {
     fn default(name: Ident) -> syn::Result<Self> {
         if name == "name" {
             return Ok(WeakStructParam::Name(None));
-        } else if name == "auto" {
-            return Ok(WeakStructParam::Auto(true));
+        } else if name == "explicit" {
+            return Ok(WeakStructParam::Explicit(true));
         } else {
             Err(syn::Error::new(
                 name.span(),
-                "Unexpected parameter. Allowed values are 'name' and 'auto'",
+                "Unexpected parameter. Allowed values are 'name' and 'explicit'",
             ))
         }
     }
     fn parse(&mut self, input: ParseStream) -> syn::Result<()> {
         match self {
             WeakStructParam::Name(ref mut v) => *v = Some(input.parse()?),
-            WeakStructParam::Auto(ref mut v) => {
+            WeakStructParam::Explicit(ref mut v) => {
                 let b: LitBool = input.parse()?;
                 *v = b.value
             }
@@ -324,13 +324,12 @@ impl Param for WeakStructParam {
 /// All settings are put as parameters to `#[weak]` attribute. This attribute may appear before type itself and before fields to be replaced.
 /// The allowed parameters are different for these cases.
 ///
-/// ## Type parameters
+/// ## Struct parameters
 ///
-/// - ```auto:  bool``` When true, all known types (at this moment they are [Rc](std::rc::Rc), [Arc](std::sync::Arc),
+/// - ```explicit:  bool``` Normally all known types (at this moment they are [Rc](std::rc::Rc), [Arc](std::sync::Arc),
 ///   [CArc](https://docs.rs/async_object/0.1.1/async_object/struct.CArc.html), [EArc](https://docs.rs/async_object/0.1.1/async_object/struct.EArc.html))
-///   are automatically replaced to weak ones.
-///   Otherwise (with ```#[weak(auto=false)]```) only fields prepend3ed by ```#[weak]``` attribute are replaced.
-///   True by default.
+///   are automatically replaced to weak ones. Setting ```explicit = true``` or just ```explicit``` in parameters disables this behavior.
+///   I.e. with ```#[weak(explicit)]``` before struct) only fields prepended by ```#[weak]``` attribute are replaced.
 ///
 /// - ```name: Ident``` Sets name of weak structure instead of default `W{struct_name}`
 ///
@@ -339,11 +338,19 @@ impl Param for WeakStructParam {
 /// ```
 /// use derive_weak::Weak;
 /// #[derive(Weak)]
-/// #[weak(name=WeakFoo, auto=false)]
+/// #[weak(name=WeakFoo, explicit)]
 /// struct Foo {
 ///   #[weak]
-///   rc: std::rc::Rc<usize>
+///   rc: std::rc::Rc<usize>,
+///   arc: std::sync::Arc<usize>
 /// }
+///
+/// let foo = Foo { rc: std::rc::Rc::new(42), arc: std::sync::Arc::new(1984) };
+/// let wfoo: WeakFoo = foo.downgrade(); // WeakFoo name instead of default WFoo
+/// let _ : &std::rc::Weak<usize> = &wfoo.rc;
+/// let _ : &std::sync::Arc<usize> = &wfoo.arc; // foo.arc not marked as #[weak], so it's not replaced
+/// let foo2: Option<Foo> = wfoo.upgrade();
+///
 /// ```
 ///
 /// ## Field parameters
@@ -379,13 +386,13 @@ pub fn derive_weak(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
 fn derive_weak_impl(mut input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     let mut weak_ident = Ident::new(format!("W{}", input.ident).as_str(), input.ident.span());
-    let mut auto = true;
+    let mut explicit = false;
     if let Some(params) = take_params::<WeakStructParam>("weak", &mut input.attrs)? {
         for param in params {
             match param {
                 WeakStructParam::Name(Some(v)) => weak_ident = v,
                 WeakStructParam::Name(None) => (),
-                WeakStructParam::Auto(v) => auto = v,
+                WeakStructParam::Explicit(v) => explicit = v,
             }
         }
     }
@@ -394,7 +401,7 @@ fn derive_weak_impl(mut input: DeriveInput) -> syn::Result<proc_macro2::TokenStr
         ..
     }) = input.data
     {
-        derive_named_fields_struct(input.vis, input.ident, weak_ident, auto, fields_named)
+        derive_named_fields_struct(input.vis, input.ident, weak_ident, explicit, fields_named)
     } else {
         Err(syn::Error::new(
             input.span(),

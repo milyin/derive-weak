@@ -35,7 +35,7 @@ fn auto() {
 #[test]
 fn no_auto() {
     #[derive(PartialEq, Weak)]
-    #[weak(name=WeakFoo, auto=false)]
+    #[weak(name=WeakFoo, explicit)]
     struct Foo {
         foo: usize,
         #[weak]
